@@ -1,0 +1,174 @@
+version: '3.8'
+
+# Сети для изоляции
+networks:
+  wallet-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+# Тома для persistence
+volumes:
+  postgres_data:
+    driver: local
+  app_logs:
+    driver: local
+  maven_repo:
+    driver: local
+
+services:
+  # PostgreSQL Database
+  wallet-db:
+    image: 'postgres:latest'
+    container_name: wallet-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-wallet_db}
+      POSTGRES_USER: ${DB_USER:-wallet_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme123}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    networks:
+      - wallet-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-wallet_user}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    command: >
+      postgres
+      -c max_connections=100
+      -c shared_buffers=256MB
+      -c log_statement=none
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # Spring Boot Application (PRODUCTION - использует runner stage)
+  wallet-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner  # PRODUCTION TARGET
+    container_name: wallet-service-prod
+    restart: unless-stopped
+    depends_on:
+      wallet-db:
+        condition: service_healthy
+    environment:
+      # Spring профиль
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILE:-prod}
+
+      # Database Configuration
+      SPRING_DATASOURCE_URL: jdbc:postgresql://wallet-db:5432/${DB_NAME:-wallet_db}
+      SPRING_DATASOURCE_USERNAME: ${DB_USER:-wallet_user}
+      SPRING_DATASOURCE_PASSWORD: ${DB_PASSWORD:-changeme123}
+
+      # JPA Configuration
+      SPRING_JPA_HIBERNATE_DDL-AUTO: validate
+      SPRING_JPA_SHOW-SQL: "false"
+
+      # Server Configuration
+      SERVER_PORT: 8080
+      SERVER_SERVLET_CONTEXT-PATH: /api
+
+      # Actuator Configuration
+      MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: health,info,metrics
+      MANAGEMENT_ENDPOINT_HEALTH_SHOW-DETAILS: when_authorized
+
+      # JVM Configuration
+      JAVA_OPTS: "-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0 -XX:+UseG1GC -XX:MaxGCPauseMillis=200"
+
+    volumes:
+      - app_logs:/var/log/wallet-service
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    networks:
+      - wallet-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+
+  # DEVELOPMENT версия (использует dev stage)
+  wallet-app-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: dev  # DEVELOPMENT TARGET
+      args:
+        USER_ID: 1000
+        GROUP_ID: 1000
+    container_name: wallet-service-dev
+    depends_on:
+      wallet-db:
+        condition: service_healthy
+    environment:
+      # Spring профиль для разработки
+      SPRING_PROFILES_ACTIVE: dev
+
+      # Database Configuration (используем те же настройки)
+      SPRING_DATASOURCE_URL: jdbc:postgresql://wallet-db:5432/${DB_NAME:-wallet_db}
+      SPRING_DATASOURCE_USERNAME: ${DB_USER:-wallet_user}
+      SPRING_DATASOURCE_PASSWORD: ${DB_PASSWORD:-changeme123}
+
+      # Development JPA settings
+      SPRING_JPA_HIBERNATE_DDL-AUTO: update
+      SPRING_JPA_SHOW-SQL: "true"
+      SPRING_JPA_PROPERTIES_HIBERNATE_FORMAT_SQL: "true"
+
+      # Spring DevTools для hot reload
+      SPRING_DEVTOOLS_RESTART_ENABLED: "true"
+      SPRING_DEVTOOLS_LIVERELOAD_ENABLED: "true"
+
+      # Server Configuration
+      SERVER_PORT: 8081
+      SERVER_SERVLET_CONTEXT-PATH: /api
+
+      # Logging Configuration для разработки
+      LOGGING_LEVEL_ROOT: INFO
+      LOGGING_LEVEL_ORG_WALLET: DEBUG
+      LOGGING_LEVEL_ORG_HIBERNATE_SQL: DEBUG
+      LOGGING_LEVEL_ORG_HIBERNATE_TYPE_DESCRIPTOR_SQL: TRACE
+
+      # Debug Configuration
+      JAVA_TOOL_OPTIONS: "-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005 -Dspring.devtools.restart.enabled=true"
+
+    volumes:
+      - ./src:/app/src:rw  # Монтируем исходники для hot reload
+      - ./pom.xml:/app/pom.xml:rw
+      - ./src/main/resources:/app/src/main/resources:rw
+      - maven_repo:/home/spring/.m2  # Кэш Maven
+      - app_logs:/var/log/wallet-service
+
+    ports:
+      - "8081:8080"  # Другой порт для dev
+      - "5005:5005"  # Remote debugging
+
+    networks:
+      - wallet-network
+
+    # Для разработки - интерактивный режим
+    stdin_open: true
+    tty: true
+
+    # Команда не нужна - используем ENTRYPOINT из Dockerfile
+    # Но если нужен Maven для hot reload, можно так:
+    # command: >
+    #   bash -c "
+    #     mvn spring-boot:run
+    #     -Dspring-boot.run.arguments='--spring.profiles.active=dev'
+    #     -Dspring-boot.run.jvmArguments='-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005'
+    #   "
