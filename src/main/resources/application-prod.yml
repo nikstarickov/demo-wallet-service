@@ -1,0 +1,66 @@
+# src/main/resources/application-prod.yml
+
+# Этот файл активируется ТОЛЬКО при активном профиле 'prod'
+spring:
+  config:
+    activate:
+      on-profile: prod
+
+  # ДАННЫЕ ДЛЯ ПОДКЛЮЧЕНИЯ К ПРОДАКШЕН БАЗЕ (берутся из переменных окружения!)
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://prod-db-host:5432/wallet_prod} # Значение по умолчанию, но лучше из env
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:20} # Настройка пула под высокую нагрузку
+      minimum-idle: 10
+      connection-timeout: 20000
+      max-lifetime: 300000
+      validation-timeout: 5000
+      leak-detection-threshold: 10000 # Обнаружение "утечек" соединений
+
+  # Отключаем всю отладочную информацию по JPA
+  jpa:
+    show-sql: false
+    properties:
+      hibernate:
+        jdbc.batch_size: 30 # Увеличиваем для prod
+        order_updates: true
+
+# Безопасные настройки сервера
+server:
+  error:
+    include-message: on_param # Не показывать текст ошибок всем подряд
+    include-stacktrace: never # Никогда не показывать стектрейс в ответе
+  compression:
+    enabled: true # Включить gzip-сжатие ответов
+    mime-types: text/html,text/xml,text/plain,text/css,text/javascript,application/json,application/xml
+
+# Строгие настройки безопасности Actuator
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, metrics # Минимум эндпоинтов
+      base-path: /internal # Выносим эндпоинты управления на отдельный путь
+  endpoint:
+    health:
+      show-details: never # Детали health-check только для внутреннего мониторинга
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+
+# Логирование в prod: структурированное (JSON) и в файл
+logging:
+  pattern:
+    console: "" # Отключаем текстовый вывод в консоль, если логи идут в stdout как JSON
+  level:
+    root: WARN # Минимальный уровень для сторонних библиотек
+    com.demo.walletservice: INFO
+  logback:
+    rollingpolicy:
+      max-file-size: 50MB
+      max-history: 30
+  file:
+    name: ${LOG_PATH:/var/log/wallet-service/app.log}
