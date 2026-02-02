@@ -1,0 +1,61 @@
+# src/main/resources/application.yml
+
+# Базовое имя приложения
+spring:
+  application:
+    name: demo-wallet-service
+
+  # ОБЩИЕ настройки JPA и Liquibase
+  jpa:
+    hibernate:
+      ddl-auto: validate # ВАЖНО: Никогда не используйте create-drop или update в продакшене. Validate безопасен.
+    open-in-view: false # Рекомендуемая настройка для корректного управления транзакциями
+    properties:
+      hibernate:
+        jdbc.batch_size: 20
+        order_inserts: true
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+
+  liquibase:
+    change-log: classpath:db/changelog/db.changelog-master.yaml
+
+  # Настройки основного TransactionManager (важно для конкурентности)
+  transaction:
+    default-timeout: 30s # Таймаут по умолчанию для транзакций
+    rollback-on-commit-failure: true
+
+  # Настройка Jackson (сериализация/десериализация JSON)
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+    deserialization:
+      fail-on-unknown-properties: true # Защита от лишних полей в запросах
+
+# Общие настройки сервера
+server:
+  servlet:
+    context-path: /api
+  error:
+    include-message: always # Для отладки, в prod может быть `on_param`
+    include-binding-errors: always
+    include-stacktrace: on_param # В prod должно быть `never`
+
+# Активация эндпоинтов Actuator (только health и metrics для безопасности)
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info, metrics, prometheus
+  endpoint:
+    health:
+      show-details: when_authorized
+    metrics:
+      enabled: true
+
+# Логгирование (общий уровень, детализация - в профильных файлах)
+logging:
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+  level:
+    root: INFO
+    com.demo.walletservice: DEBUG # Базовый уровень для вашего пакета
